@@ -1,0 +1,104 @@
+
+module async_fifo_sv #(
+    parameter int  data_width = 8,
+    parameter int addr_width = 4
+)(
+    input  logic [data_width-1:0] data_in,
+    input  logic                  wr_en,
+    input  logic                  wr_clk,
+    input  logic                  wr_rst,
+    output logic                  full,
+
+    output logic [data_width-1:0] data_out,
+    input  logic                  rd_en,
+    input  logic                  rd_clk,
+    input  logic                  rd_rst,
+    output logic                  empty
+);
+
+    localparam int depth = 1 << addr_width;
+
+    // FIFO memory
+    logic [data_width-1:0] mem [0:depth-1];
+
+    // Write pointer (binary & gray)
+    logic [addr_width:0] wr_ptr_bin, wr_ptr_gray;
+
+    // Read pointer (binary & gray)
+    logic [addr_width:0] rd_ptr_bin, rd_ptr_gray;
+
+    // Synchronized gray pointers
+    logic [addr_width:0] rd_ptr_gray_sync_wr1, rd_ptr_gray_sync_wr2;
+    logic [addr_width:0] wr_ptr_gray_sync_rd1, wr_ptr_gray_sync_rd2;
+
+    //=================================================
+    // Write Operation
+    //=================================================
+    always_ff @(posedge wr_clk or posedge wr_rst) begin
+        if (wr_rst) begin
+            wr_ptr_bin          <= '0;
+            wr_ptr_gray         <= '0;
+            rd_ptr_gray_sync_wr1 <= '0;
+            rd_ptr_gray_sync_wr2 <= '0;
+        end else begin
+            if (wr_en && !full) begin
+                mem[wr_ptr_bin[addr_width-1:0]] <= data_in;
+                wr_ptr_bin  <= wr_ptr_bin + 1;
+                wr_ptr_gray <= (wr_ptr_bin + 1) ^ ((wr_ptr_bin + 1) >> 1);
+            end
+            rd_ptr_gray_sync_wr1 <= rd_ptr_gray;
+            rd_ptr_gray_sync_wr2 <= rd_ptr_gray_sync_wr1;
+        end
+    end
+
+    //=================================================
+    // Read Operation
+    //=================================================
+    always_ff @(posedge rd_clk or posedge rd_rst) begin
+        if (rd_rst) begin
+            rd_ptr_bin           <= '0;
+            rd_ptr_gray          <= '0;
+            wr_ptr_gray_sync_rd1 <= '0;
+            wr_ptr_gray_sync_rd2 <= '0;
+            data_out             <= '0;
+        end else begin
+            if (rd_en && !empty) begin
+                data_out   <= mem[rd_ptr_bin[addr_width-1:0]];
+                rd_ptr_bin <= rd_ptr_bin + 1;
+                rd_ptr_gray <= (rd_ptr_bin + 1) ^ ((rd_ptr_bin + 1) >> 1);
+            end
+            wr_ptr_gray_sync_rd1 <= wr_ptr_gray;
+            wr_ptr_gray_sync_rd2 <= wr_ptr_gray_sync_rd1;
+        end
+    end
+
+    //=================================================
+    // Gray to Binary Conversion Function
+    //=================================================
+    function automatic logic [addr_width:0] gray_to_bin(input logic [addr_width:0] gray);
+        int i;
+        begin
+            gray_to_bin[addr_width] = gray[addr_width];
+            for (i = addr_width-1; i >= 0; i--)
+                gray_to_bin[i] = gray_to_bin[i+1] ^ gray[i];
+        end
+    endfunction
+
+    //=================================================
+    // Convert Gray Pointers to Binary
+    //=================================================
+    logic [addr_width:0] wr_ptr_gray_to_bin          = gray_to_bin(wr_ptr_gray);
+    logic [addr_width:0] rd_ptr_gray_sync_wr2_to_bin = gray_to_bin(rd_ptr_gray_sync_wr2);
+    logic [addr_width:0] rd_ptr_gray_to_bin          = gray_to_bin(rd_ptr_gray);
+    logic [addr_width:0] wr_ptr_gray_sync_rd2_to_bin = gray_to_bin(wr_ptr_gray_sync_rd2);
+
+    //=================================================
+    // Full and Empty Flag Logic
+    //=================================================
+    assign full  = (wr_ptr_gray_to_bin[addr_width] != rd_ptr_gray_sync_wr2_to_bin[addr_width]) &&
+                   (wr_ptr_gray_to_bin[addr_width-1:0] == rd_ptr_gray_sync_wr2_to_bin[addr_width-1:0]);
+
+    assign empty = (rd_ptr_gray_to_bin == wr_ptr_gray_sync_rd2_to_bin);
+
+endmodule
+
